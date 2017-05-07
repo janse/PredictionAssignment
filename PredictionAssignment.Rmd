@@ -1,0 +1,93 @@
+---
+title: "Prediction Assignment"
+author: "Jasen Cooper"
+date: "May 7, 2017"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## Introduction
+
+Six young health participants were asked to perform one set of 10 repetitions of the Unilateral Dumbbell Biceps Curl in five different fashions: 
+
+* exactly according to the specification (Class A)
+* throwing the elbows to the front (Class B)
+* lifting the dumbbell only halfway (Class C)
+* lowering the dumbbell only halfway (Class D)
+* throwing the hips to the front (Class E)
+
+Read more: http://groupware.les.inf.puc-rio.br/har#ixzz4gQ0zsO8g
+
+## Prepare Data
+First load all required libraries, and import the data:
+
+```{r}
+library(data.table)
+library(curl)
+library(caret)
+library(parallel)
+library(doParallel)
+
+set.seed(1234)
+test.url <- "https://d396qusza40orc.cloudfront.net/predmachlearn/pml-testing.csv"
+train.url <- "https://d396qusza40orc.cloudfront.net/predmachlearn/pml-training.csv"
+
+test <- read.csv(test.url,na.strings=c("NA","#DIV/0!",""))
+train <- read.csv(train.url,na.strings=c("NA","#DIV/0!",""))
+```
+
+Now clean the data, first using Near-Zero-Value scrub. You can also use colSums(is.na(train)) to see that columns either are almost all NA's or have 0 NA's. So we'll also remove anything with NA's. And there are some columns which are, intuitively, not going to be good predictors. These columns capture metadata from the experiment (such as participant name) instead of actual measurements. They won't be useful to predict exercise type outside of the experimental context, so they can be removed.
+
+```{r }
+nzv <- nearZeroVar(train,saveMetrics = TRUE)
+train <- train[,nzv$nzv==FALSE]
+
+keep <- names(which(colSums(is.na(train)) == 0))
+train <- subset(train, select = keep)
+
+train <- subset(train, select = -c(X,user_name,raw_timestamp_part_1,raw_timestamp_part_2,cvtd_timestamp,num_window))
+```
+
+## Subset Data
+Now that the data has been cleaned, break the training set into two new subsets for training and testing:
+
+``` {r}
+inTrain <- createDataPartition(y = train$classe,p=0.6, list = FALSE)
+newTrain <- train[inTrain,]
+newTest <- train[-inTrain,]
+```
+
+## Set Up Parallel Processing
+
+Per recommendation from lgreski in the Coursera forums (see https://github.com/lgreski/datasciencectacontent/blob/master/markdown/pml-randomForestPerformance.md), will use parallel processing to improve model performance.
+
+``` {r}
+cluster <- makeCluster(detectCores() - 1) # convention to leave 1 core for OS
+registerDoParallel(cluster)
+
+fitControl <- trainControl(method = "cv",
+                           number = 10,
+                           allowParallel = TRUE)
+```
+
+## Fit Using Random Forest
+Create the prediction model, then turn off parallel processing and display results.
+``` {r}
+fit <- train(classe ~ ., method="rf",data=newTrain,trControl = fitControl)
+
+stopCluster(cluster)
+registerDoSEQ()
+
+fit
+fit$resample
+confusionMatrix.train(fit)
+```
+
+Accuracy is near 99%; can't get much better than that! This model produced the below predictions on the original Test set, which resulted in a 100% score on the project quiz:
+
+```{r}
+predict(fit, newdata=test)
+```
